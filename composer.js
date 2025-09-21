@@ -1,6 +1,5 @@
-/* ...existing code... */
 export async function composeClips(blobs, opts){
-  const { outroSeconds=3, logoUrl, outroAudio, width=1280, height=720, fps=30 } = opts;
+  const { onProgress, outroSeconds=3, logoUrl, outroAudio, width=1280, height=720, fps=30 } = opts;
 
   const canvas = document.createElement("canvas");
   canvas.width = width; canvas.height = height;
@@ -26,17 +25,19 @@ export async function composeClips(blobs, opts){
   const drawLetterbox = ()=>{ ctx.fillStyle="#000"; ctx.fillRect(0,0,width,height); };
 
   async function playVideoBlob(blob){
-    return new Promise((resolve)=>{
+    return new Promise((resolve, reject)=>{
       const v = document.createElement("video");
       v.src = URL.createObjectURL(blob);
       v.playsInline = true;
       v.crossOrigin = "anonymous";
       v.muted = false;
-      const srcNode = ac.createMediaElementSource(v);
-      srcNode.connect(masterGain);
-      v.addEventListener("loadedmetadata", ()=>{
-        v.play();
-        const start = performance.now();
+
+      let srcNode;
+
+      const onPlaying = () => {
+        srcNode = ac.createMediaElementSource(v);
+        srcNode.connect(masterGain);
+
         const render = ()=>{
           drawLetterbox();
           // Fit contain
@@ -50,11 +51,20 @@ export async function composeClips(blobs, opts){
           }
         };
         render();
+      };
+      
+      v.addEventListener("loadedmetadata", ()=>{
+        v.play().catch(reject);
       }, {once:true});
+      v.addEventListener("playing", onPlaying, { once: true });
       v.addEventListener("ended", ()=>{
-        srcNode.disconnect();
+        if (srcNode) srcNode.disconnect();
         URL.revokeObjectURL(v.src);
         resolve();
+      }, {once:true});
+      v.addEventListener("error", (e) => {
+        URL.revokeObjectURL(v.src);
+        reject(e);
       }, {once:true});
     });
   }
@@ -98,10 +108,28 @@ export async function composeClips(blobs, opts){
 
   recorder.start(200);
 
+  let clipIndex = 0;
   for (const b of blobs){
-    await playVideoBlob(b);
-    await playOutro();
+    if (onProgress) onProgress(clipIndex, 'start');
+    try {
+      await playVideoBlob(b);
+      // Don't play outro if it's the final composition
+      if (opts.outroPerClip) {
+         await playOutro();
+      }
+    } catch (e) {
+        console.error(`Error processing clip ${clipIndex}:`, e);
+        if (onProgress) onProgress(clipIndex, 'error');
+    }
+    if (onProgress) onProgress(clipIndex, 'end');
+    clipIndex++;
   }
+
+  // Play a single outro at the very end for final composition
+  if (!opts.outroPerClip && blobs.length > 0) {
+      await playOutro();
+  }
+
 
   recorder.stop();
 
@@ -111,4 +139,3 @@ export async function composeClips(blobs, opts){
   try { ac.close(); } catch {}
   return done;
 }
-/* ...existing code... */

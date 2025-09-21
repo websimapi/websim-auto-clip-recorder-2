@@ -13,7 +13,9 @@ const els = {
   navigator: document.getElementById("navigator"),
   composeBtn: document.getElementById("btn-compose"),
   composeStatus: document.getElementById("compose-status"),
-  autoSplitCaptured: document.getElementById("auto-split-captured")
+  autoSplitCaptured: document.getElementById("auto-split-captured"),
+  finalPreview: document.getElementById("final-preview"),
+  downloadLink: document.getElementById("download-link")
 };
 
 let captureStream = null;
@@ -46,6 +48,7 @@ async function makeThumb(blob){
       c.toBlob(b=>res(URL.createObjectURL(b)),"image/jpeg",0.7);
       URL.revokeObjectURL(v.src);
     }, {once:true});
+    v.addEventListener("error", () => res(null), { once: true });
   });
 }
 
@@ -59,6 +62,7 @@ async function getBlobDuration(blob){
       URL.revokeObjectURL(v.src);
       resolve(ms);
     }, {once:true});
+    v.addEventListener("error", () => resolve(0), { once: true });
   });
 }
 
@@ -67,6 +71,8 @@ function renderClips(){
   clips.forEach((c, idx)=>{
     const card = document.createElement("div");
     card.className="clip";
+    if (c.processing) card.classList.add('processing');
+    card.dataset.clipId = c.id;
     const img = document.createElement("img");
     img.className="thumb";
     img.src = c.thumb || "";
@@ -82,17 +88,27 @@ function renderClips(){
     cb.checked = c.selected ?? true;
     cb.addEventListener("change", ()=>{ c.selected = cb.checked; persistClips(); toggleComposeBtn(); });
     const dl = document.createElement("a");
-    dl.textContent="Download";
+    dl.textContent="Download Clip";
+    dl.className = "clip-download";
     dl.href = URL.createObjectURL(c.blob);
     dl.download = `clip-${idx+1}.webm`;
+    
+    const actions = document.createElement('div');
+    actions.className = 'clip-actions';
+    
     sel.appendChild(cb);
     sel.appendChild(document.createTextNode("Select"));
-    info.appendChild(meta);
-    info.appendChild(sel);
-    card.appendChild(img);
-    card.appendChild(info);
-    card.appendChild(dl);
-    els.grid.appendChild(card);
+     info.appendChild(meta);
+    actions.appendChild(sel);
+    info.appendChild(actions);
+    
+     card.appendChild(img);
+     card.appendChild(info);
+     const info2 = info.cloneNode(false);
+     info2.style.justifyContent = 'center';
+     info2.appendChild(dl);
+     card.appendChild(info2);
+     els.grid.appendChild(card);
   });
   toggleComposeBtn();
 }
@@ -124,20 +140,46 @@ function setupRecorder(){
   recorder.ondataavailable = e => { if (e.data && e.data.size>0) chunks.push(e.data); };
   recorder.onstop = async () => {
     const rawBlob = new Blob(chunks, { type: "video/webm" });
+    if (rawBlob.size === 0) {
+      if (recording) {
+        recorder.start(1000);
+      }
+      return;
+    }
+    
     // auto-append outro to each clip
     const { composeClips } = await import("./composer.js");
-    const composedBlob = await composeClips([rawBlob], {
-      outroSeconds: 3,
-      logoUrl: "/logowhite.png",
-      outroAudio: "/hey_hype_radio (2).mp3",
-      width: 1280,
-      height: 720,
-      fps: 30
-    });
-    const duration = await getBlobDuration(composedBlob);
-    const thumb = await makeThumb(composedBlob);
-    clips.push({ blob: composedBlob, createdAt: Date.now(), duration, thumb, selected: true });
-    renderClips(); persistClips();
+    const clipId = Date.now();
+    const tempClip = { id: clipId, blob: rawBlob, createdAt: clipId, duration: 0, thumb: '', selected: true, processing: true };
+    clips.push(tempClip);
+    renderClips();
+
+    try {
+      const composedBlob = await composeClips([rawBlob], {
+        outroSeconds: 3,
+        logoUrl: "/logowhite.png",
+        outroAudio: "/hey_hype_radio (2).mp3",
+        width: 1280,
+        height: 720,
+        fps: 30,
+        outroPerClip: true
+      });
+      const duration = await getBlobDuration(composedBlob);
+      const thumb = await makeThumb(composedBlob);
+      
+      const finalClip = { id: clipId, blob: composedBlob, createdAt: clipId, duration, thumb, selected: true, processing: false };
+      const clipIndex = clips.findIndex(c => c.id === clipId);
+      if (clipIndex !== -1) {
+          clips[clipIndex] = finalClip;
+      }
+    } catch(e) {
+        console.error("Failed to compose clip", e);
+        const clipIndex = clips.findIndex(c => c.id === clipId);
+        if (clipIndex !== -1) clips.splice(clipIndex, 1); // remove failed clip
+    }
+    
+    renderClips(); 
+    persistClips();
     chunks = [];
     if (recording) {
       currentClipStart = Date.now();
@@ -246,26 +288,41 @@ function setupNavigator(){
 document.getElementById("btn-compose").addEventListener("click", async ()=>{
   const selected = clips.filter(c=>c.selected);
   if (!selected.length) return;
+  const originalBtnText = els.composeBtn.textContent;
   els.composeStatus.textContent = "Composing...";
   els.composeStatus.style.color = "";
   els.composeBtn.disabled = true;
+  els.composeBtn.textContent = 'Composing...';
   try {
     const { composeClips } = await import("./composer.js");
+    const onProgress = (index, status) => {
+        const clip = selected[index];
+        const card = document.querySelector(`.clip[data-clip-id='${clip.id}']`);
+        if (!card) return;
+        if (status === 'start') {
+            card.classList.add('processing');
+        } else if (status === 'end') {
+            card.classList.remove('processing');
+        } else if (status === 'error') {
+            card.classList.remove('processing');
+            card.style.outline = '2px solid crimson';
+        }
+    };
     const out = await composeClips(selected.map(c=>c.blob), {
       outroSeconds: 3,
       logoUrl: "/logowhite.png",
       outroAudio: "/hey_hype_radio (2).mp3",
       width: 1280,
       height: 720,
-      fps: 30
+      fps: 30,
+      outroPerClip: false,
+      onProgress
     });
     const url = URL.createObjectURL(out);
-    const prev = document.getElementById("final-preview");
-    prev.src = url;
-    prev.play().catch(()=>{});
-    const a = document.getElementById("download-link");
-    a.href = url;
-    a.style.display = "inline-block";
+    els.finalPreview.src = url;
+    els.finalPreview.play().catch(()=>{});
+    els.downloadLink.href = url;
+    els.downloadLink.style.display = "inline-block";
     els.composeStatus.textContent = "Done.";
   } catch (e){
     console.error(e);
@@ -274,6 +331,7 @@ document.getElementById("btn-compose").addEventListener("click", async ()=>{
     alert("Composition failed. See console for details.");
   } finally {
     els.composeBtn.disabled = false;
+    els.composeBtn.textContent = originalBtnText;
   }
 });
 

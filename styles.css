@@ -16,12 +16,14 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .hint{color:var(--muted);font-size:.9rem;margin-top:8px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px}
 .clip{border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+.clip.processing { opacity: 0.7; pointer-events: none; }
 .thumb{width:100%;aspect-ratio:16/9;background:#000;object-fit:cover}
 .clip-info{display:flex;justify-content:space-between;align-items:center;padding:8px 10px}
-.meta{font-size:.85rem;color:var(--muted)}
+.meta{font-size:.85rem;color:var(--muted); flex-grow: 1;}
 .sel{display:flex;align-items:center;gap:6px}
+.clip-actions { display: flex; align-items: center; gap: 8px; }
+a.clip-download { font-size: 0.85rem; }
 .compose-row{display:flex;align-items:center;gap:12px;margin-bottom:10px}
 #final-preview{width:100%;max-height:60vh;background:#000;border-radius:12px;border:1px solid var(--line)}
 .download-link{display:inline-block;margin-top:8px}
 /* ...existing styles... */
-
